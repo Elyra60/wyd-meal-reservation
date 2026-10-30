@@ -1,0 +1,4 @@
+import {avatarStore} from '../../../lib/avatar-store';
+import {env} from 'cloudflare:workers';
+import {requestUser} from '../../../lib/request-user';
+export async function GET(request:Request){let user=await requestUser(request);if(!user)return new Response(null,{status:401});const target=new URL(request.url).searchParams.get('userId');if(target&&target!==user.id){if(user.role!=='manager'||user.must_change)return new Response(null,{status:403});user=await (env as any).DB.prepare('SELECT avatar_key FROM users WHERE id=?').bind(target).first();}if(!user?.avatar_key)return new Response(null,{status:404});const file=await avatarStore((env as any).DB).get(user.avatar_key);if(!file)return new Response(null,{status:404});return new Response(file.body,{headers:{'Content-Type':file.httpMetadata?.contentType||'image/jpeg','X-Content-Type-Options':'nosniff','Cache-Control':'private, max-age=300'}});}

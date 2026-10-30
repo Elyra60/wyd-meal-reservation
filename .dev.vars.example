@@ -1,0 +1,7 @@
+# Fill only in a local ignored .dev.vars file. Never commit real secrets.
+WY_INITIAL_HASH=
+MANAGER_INITIAL_HASH=
+RESEND_API_KEY=
+MAIL_FROM=
+AMAP_JS_KEY=
+AMAP_SECURITY_CODE=

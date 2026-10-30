@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1793284176900,
+      "tag": "0000_rapid_frog_thor",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793288040227,
+      "tag": "0001_bumpy_the_call",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793290027962,
+      "tag": "0002_mysterious_mysterio",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793291613136,
+      "tag": "0003_aspiring_night_nurse",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793337607218,
+      "tag": "0004_greedy_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793338646620,
+      "tag": "0005_first_catseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793341188953,
+      "tag": "0006_lively_risque",
+      "breakpoints": true
+    }
+  ]
+}

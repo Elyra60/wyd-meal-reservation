@@ -1,0 +1,1 @@
+export function weekRange(start:string){if(!/^\d{4}-\d{2}-\d{2}$/.test(start))return '';const end=new Date(start+'T00:00:00Z');end.setUTCDate(end.getUTCDate()+6);return `${start.replaceAll('-','/')} — ${end.toISOString().slice(0,10).replaceAll('-','/')}`;}
