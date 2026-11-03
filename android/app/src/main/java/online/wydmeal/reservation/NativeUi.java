@@ -11,8 +11,10 @@ import android.widget.*;
 /** Material 3 inspired native Views: tonal surfaces, rounded shapes, scalable type. */
 public final class NativeUi {
  public final Activity a;public final boolean dark;public int bg,card,tonal,primary,onPrimary,text,muted,line,error;
- public NativeUi(Activity activity){a=activity;dark=(a.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES;
+ public NativeUi(Activity activity){a=activity;dark=Appearance.dark(a);
   bg=Color.parseColor(dark?"#101510":"#F7FAF2");card=Color.parseColor(dark?"#1C241C":"#FFFFFF");tonal=Color.parseColor(dark?"#2C3E2B":"#E4EEDB");primary=Color.parseColor(dark?"#B6D6A2":"#3E6337");onPrimary=Color.parseColor(dark?"#14330F":"#FFFFFF");text=Color.parseColor(dark?"#E5EBDC":"#202B1E");muted=Color.parseColor(dark?"#B9C6B2":"#65735E");line=Color.parseColor(dark?"#3C4938":"#DDE5D5");error=Color.parseColor(dark?"#FFB4AB":"#B3261E");
+  int seed=Color.parseColor(a.getSharedPreferences("appearance",0).getString("seed","#3E6337"));
+  if(!a.getSharedPreferences("appearance",0).getBoolean("dynamic",false)){primary=Appearance.tone(seed,dark?.28f:.65f,dark?.88f:.42f);tonal=Appearance.tone(seed,dark?.25f:.08f,dark?.24f:.94f);onPrimary=dark?Color.rgb(15,25,15):Color.WHITE;}
   if(Build.VERSION.SDK_INT>=31&&a.getSharedPreferences("appearance",0).getBoolean("dynamic",false)){primary=a.getColor(dark?android.R.color.system_accent1_200:android.R.color.system_accent1_600);tonal=a.getColor(dark?android.R.color.system_accent1_800:android.R.color.system_accent1_100);}
  }
  public int dp(float n){return Math.round(n*a.getResources().getDisplayMetrics().density);}

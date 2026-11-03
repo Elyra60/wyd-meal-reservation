@@ -23,3 +23,5 @@ work/
 *.p12
 *.pfx
 .DS_Store
+
+public/android-packages/

@@ -1,0 +1,29 @@
+{
+  "versionCode": 4,
+  "versionName": "2.2.0",
+  "minSdk": 26,
+  "apkUrl": "https://wyd-meal-reservation.online/downloads/wyd-meal-reservation-2.2.0-native.apk",
+  "bytes": 34426402,
+  "sha256": "e1a2bd615e74e3d2d264302ec02b15c0ee000848169df018e32913164f1f1918",
+  "notes": [
+    "修复登录按钮与同行人输入区重叠",
+    "新增深色、浅色、跟随系统和自定义主题颜色",
+    "接入原生高德地图，支持拖动缩放和地图选点",
+    "支持启动检查更新、确认下载和安装包校验",
+    "新增系统通知与后台定时消息检查"
+  ],
+  "parts": [
+    {
+      "path": "/android-packages/2.2.0/part-0.bin",
+      "bytes": 16777216
+    },
+    {
+      "path": "/android-packages/2.2.0/part-1.bin",
+      "bytes": 16777216
+    },
+    {
+      "path": "/android-packages/2.2.0/part-2.bin",
+      "bytes": 871970
+    }
+  ]
+}

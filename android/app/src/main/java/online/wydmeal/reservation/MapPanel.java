@@ -1,0 +1,24 @@
+package online.wydmeal.reservation;
+import android.app.*;
+import android.content.*;
+import android.net.Uri;
+import android.os.Bundle;
+import android.view.*;
+import android.widget.*;
+import com.amap.api.maps.*;
+import com.amap.api.maps.model.*;
+import org.json.*;
+import java.util.*;
+
+/** Native SDK surface, initialized only after explicit map privacy consent. */
+public final class MapPanel {
+ public interface Pick {void point(double latitude,double longitude);void place(JSONObject place);}
+ private final Activity a;private final NativeUi ui;private final Pick callback;private final LinearLayout container;private MapView view;private AMap map;private final ArrayList<JSONObject> pending=new ArrayList<>();private Bundle state;private boolean resumed;
+ public MapPanel(Activity activity,NativeUi theme,LinearLayout parent,Bundle saved,Pick pick){a=activity;ui=theme;state=saved;callback=pick;container=ui.column();LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=ui.dp(12);lp.bottomMargin=ui.dp(16);parent.addView(container,lp);if(a.getSharedPreferences("map_privacy",0).getBoolean("agreed",false))initialize();else ui.fullButton(container,"启用交互地图",true,()->consent());}
+ private void consent(){new AlertDialog.Builder(a).setTitle("启用高德地图").setMessage("地图由高德开放平台提供。为显示地图和附近地点，SDK 会处理网络、设备及位置信息；精确位置仅在你授权定位后使用。请先阅读高德地图隐私政策，同意后才会初始化 SDK。").setNeutralButton("阅读隐私政策",(d,w)->{a.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://lbs.amap.com/pages/privacy/")));}).setPositiveButton("同意并启用",(d,w)->{a.getSharedPreferences("map_privacy",0).edit().putBoolean("agreed",true).apply();initialize();}).setNegativeButton("暂不启用",null).show();}
+ private void initialize(){if(view!=null)return;try{MapsInitializer.updatePrivacyShow(a,true,true);MapsInitializer.updatePrivacyAgree(a,true);view=new MapView(a);view.onCreate(state);map=view.getMap();if(ui.dark)map.setMapType(AMap.MAP_TYPE_NIGHT);container.removeAllViews();GestureHost gestures=new GestureHost(a);gestures.addView(view,new FrameLayout.LayoutParams(-1,-1));container.addView(gestures,new LinearLayout.LayoutParams(-1,ui.dp(320)));view.setOnTouchListener((v,event)->{v.getParent().requestDisallowInterceptTouchEvent(event.getActionMasked()!=MotionEvent.ACTION_UP&&event.getActionMasked()!=MotionEvent.ACTION_CANCEL);return false;});map.getUiSettings().setZoomControlsEnabled(true);map.getUiSettings().setCompassEnabled(true);map.getUiSettings().setScaleControlsEnabled(true);map.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(31.2304,121.4737),11));map.setOnMapClickListener(p->callback.point(p.latitude,p.longitude));map.setOnPOIClickListener(p->{callback.place(ApiClient.object("id",p.getPoiId(),"name",p.getName(),"address","","lat",p.getCoordinate().latitude,"lng",p.getCoordinate().longitude,"system","gcj02"));});map.setOnMarkerClickListener(marker->{Object p=marker.getObject();if(p instanceof JSONObject)callback.place((JSONObject)p);return true;});container.addView(ui.text("拖动、双指缩放；点击餐厅标记或地图位置选点。",13,ui.muted,false));if(resumed)view.onResume();show(pending);}catch(Exception error){container.removeAllViews();container.addView(ui.body("地图暂时未能加载，可先使用下方餐厅搜索。"));ui.fullButton(container,"重试加载地图",false,()->{if(view!=null)view.onDestroy();view=null;initialize();});}}
+ public void show(List<JSONObject> places){if(map==null){pending.clear();pending.addAll(places);return;}map.clear();LatLngBounds.Builder bounds=new LatLngBounds.Builder();int count=0;for(JSONObject p:new ArrayList<>(places)){double lat=p.optDouble("lat",Double.NaN),lng=p.optDouble("lng",Double.NaN);if(!Double.isFinite(lat)||!Double.isFinite(lng))continue;LatLng point=new LatLng(lat,lng);Marker marker=map.addMarker(new MarkerOptions().position(point).title(p.optString("name")).snippet(p.optString("address")));marker.setObject(p);bounds.include(point);count++;}if(count==1){JSONObject first=places.get(0);map.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(first.optDouble("lat"),first.optDouble("lng")),16));}else if(count>1)map.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(),ui.dp(40)));}
+ public void center(double lat,double lng){if(map!=null)map.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(lat,lng),16));}
+ private static final class GestureHost extends FrameLayout {GestureHost(Activity a){super(a);}@Override public boolean dispatchTouchEvent(MotionEvent e){getParent().requestDisallowInterceptTouchEvent(e.getActionMasked()!=MotionEvent.ACTION_UP&&e.getActionMasked()!=MotionEvent.ACTION_CANCEL);return super.dispatchTouchEvent(e);}}
+ public void resume(){resumed=true;if(view!=null)view.onResume();}public void pause(){resumed=false;if(view!=null)view.onPause();}public void save(Bundle state){if(view!=null)view.onSaveInstanceState(state);}public void destroy(){if(view!=null)view.onDestroy();}
+}

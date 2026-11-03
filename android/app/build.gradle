@@ -2,7 +2,9 @@ plugins { id 'com.android.application' }
 android {
  namespace 'online.wydmeal.reservation'
  compileSdk 36
- defaultConfig { applicationId 'online.wydmeal.reservation'; minSdk 26; targetSdk 36; versionCode 3; versionName '2.1.0' }
+ defaultConfig { applicationId 'online.wydmeal.reservation'; minSdk 26; targetSdk 36; versionCode 4; versionName '2.2.0'; manifestPlaceholders = [AMAP_ANDROID_KEY: System.getenv('AMAP_ANDROID_KEY') ?: ''] }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildTypes { release { minifyEnabled false } }
 }
+
+dependencies { implementation files('libs/amap-sdk.jar') }

@@ -3,15 +3,28 @@
   "name": "wyd-meal-reservation",
   "main": "worker/index.ts",
   "compatibility_date": "2026-05-15",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "preview_urls": false,
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "wyd-meal-reservation-db",
-    "database_id": "00000000-0000-4000-8000-000000000000",
-    "migrations_dir": "drizzle"
-  }],
-  "triggers": {"crons": ["0 * * * *"]},
-  "observability": {"enabled": true}
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wyd-meal-reservation-db",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "drizzle"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "binding": "ASSETS"
+  }
 }

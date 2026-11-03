@@ -187,4 +187,8 @@ npm run build
 
 ## 原生安卓客户端
 
-原生 Android 2.1 的源码见 [android](android/README.md)。采用 Android Views 实现，不包含 WebView；直接复用本项目的 HTTPS API。新增交通方式与人均消费，并参照网页版分层展示预约卡片。APK 和签名备份在本地单独保存，签名密钥不入库。
+原生 Android 2.2 的源码见 [android](android/README.md)。业务界面采用 Android Views，地图采用高德原生 SDK，直接复用本项目 HTTPS API。支持主题与颜色设置、应用更新、系统通知和后台定时检查。签名密钥不入库。
+
+更新清单为 `/android/latest.json`；同域 APK 下载由 Worker 通过 ASSETS 绑定流式组合静态资产分段，并支持 HEAD/Range。发布新版本时必须先构建 APK 并生成对应元数据与分段，再部署。源码仓库忽略 public/android-packages 中的安装包二进制。
+
+`/api/mobile-notices?after=ID` 仅返回当前登录账号的消息，并按游标分页。安卓后台最短每15分钟由系统安排网络检查，前台约30秒检查；尚未接入极光或其他即时推送服务。
