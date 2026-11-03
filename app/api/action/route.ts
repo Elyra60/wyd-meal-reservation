@@ -107,7 +107,7 @@ export async function POST(r:Request){try{
   await db().batch([db().prepare('UPDATE bookings SET id=CASE WHEN status=? THEN id ELSE NULL END WHERE id=?').bind(target.status,target.id),db().prepare("UPDATE bookings SET status='cancelled',cancelled_by=?,reason=? WHERE id=?").bind(u.id,reason,target.id),audit(u,a,target.id,{before:target,reason})]);return json({ok:true});
  }
  if(a==='manageBooking'){
-  const f=mealFields(b,'edit'),dt=new Date(f.mealAt),changedTime=f.mealAt!==target.meal_at;
+  const f=mealFields({...b,transportMode:b.transportMode??target.transport_mode,estimatedCost:b.estimatedCost===undefined?(target.estimated_cost_cents==null?'':String(target.estimated_cost_cents/100)):b.estimatedCost},'edit'),dt=new Date(f.mealAt),changedTime=f.mealAt!==target.meal_at;
   if(changedTime&&target.status==='completed'&&dt.getTime()>now)throw new Error('已完成的用餐不能改到未来。');
   if(changedTime&&['pending','approved'].includes(target.status)&&dt.getTime()<=now)throw new Error('未完成预约只能改到未来。');
   const kcal=target.status==='completed'?calories(b.calories):target.calories??null;
@@ -115,7 +115,7 @@ export async function POST(r:Request){try{
   const queries=[db().prepare('UPDATE bookings SET id=CASE WHEN status=? AND meal_at=? THEN id ELSE NULL END WHERE id=?').bind(target.status,target.meal_at,target.id)];
   if(move)queries.push(db().prepare('DELETE FROM approvals WHERE booking_id=?').bind(target.id));
   if(target.status==='pending')queries.push(db().prepare('UPDATE bookings SET id=CASE WHEN (SELECT count(*) FROM approvals WHERE week=?)<'+capSql('?')+' THEN id ELSE NULL END WHERE id=?').bind(f.week,f.week,target.id));
-  queries.push(db().prepare('UPDATE bookings SET name=?,restaurant=?,address=?,companions=?,contact=?,notes=?,party_size=?,meal_type=?,meal_at=?,week=?,calories=?,latitude=CASE WHEN address!=? OR restaurant!=? THEN NULL ELSE latitude END,longitude=CASE WHEN address!=? OR restaurant!=? THEN NULL ELSE longitude END WHERE id=?').bind(f.name,f.restaurant,f.address,f.companions,f.contact,f.notes,f.partySize,f.mealType,f.mealAt,f.week,kcal,f.address,f.restaurant,f.address,f.restaurant,target.id));
+  queries.push(db().prepare('UPDATE bookings SET name=?,restaurant=?,address=?,companions=?,contact=?,notes=?,party_size=?,meal_type=?,meal_at=?,week=?,calories=?,transport_mode=?,estimated_cost_cents=?,latitude=CASE WHEN address!=? OR restaurant!=? THEN NULL ELSE latitude END,longitude=CASE WHEN address!=? OR restaurant!=? THEN NULL ELSE longitude END WHERE id=?').bind(f.name,f.restaurant,f.address,f.companions,f.contact,f.notes,f.partySize,f.mealType,f.mealAt,f.week,kcal,f.transportMode,f.estimatedCostCents,f.address,f.restaurant,f.address,f.restaurant,target.id));
   if(move)queries.push(db().prepare('INSERT INTO approvals(booking_id,week,slot) VALUES(?,?,COALESCE((SELECT max(slot)+1 FROM approvals WHERE week=?),1))').bind(target.id,f.week,f.week));
   queries.push(audit(u,a,target.id,{before:target,after:{...f,calories:kcal}}));await db().batch(queries);return json({ok:true});
  }
@@ -128,7 +128,7 @@ export async function POST(r:Request){try{
   const f=mealFields(b,self?'self':'booking'),kcal=self?calories(b.calories):null;
   const requestId=String(b.requestId||crypto.randomUUID());if(!/^[a-f0-9-]{36}$/.test(requestId))throw new Error('提交标识无效，请重新打开表单。');
   if(await db().prepare('SELECT id FROM bookings WHERE id=? AND user_id=?').bind(requestId,u.id).first())return json({ok:true});
-  await db().prepare('INSERT INTO bookings(id,user_id,name,restaurant,meal_at,week,created,meal_type,party_size,companions,contact,notes,address,latitude,longitude,coordinate_system,source,status,calories,completed_at,completion_method) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(requestId,u.id,f.name,f.restaurant,f.mealAt,f.week,new Date().toISOString(),f.mealType,f.partySize,f.companions,f.contact,f.notes,f.address,f.latitude,f.longitude,f.coordinateSystem,self?'self':'reservation',self?'completed':'pending',kcal,self?new Date().toISOString():null,self?'self':null).run();return json({ok:true});
+  await db().prepare('INSERT INTO bookings(id,user_id,name,restaurant,meal_at,week,created,meal_type,party_size,companions,contact,notes,address,latitude,longitude,coordinate_system,source,status,calories,completed_at,completion_method,transport_mode,estimated_cost_cents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(requestId,u.id,f.name,f.restaurant,f.mealAt,f.week,new Date().toISOString(),f.mealType,f.partySize,f.companions,f.contact,f.notes,f.address,f.latitude,f.longitude,f.coordinateSystem,self?'self':'reservation',self?'completed':'pending',kcal,self?new Date().toISOString():null,self?'self':null,f.transportMode,f.estimatedCostCents).run();return json({ok:true});
  }
  const booking=await db().prepare('SELECT * FROM bookings WHERE id=?').bind(String(b.id||'')).first();if(!booking)throw new Error('预约不存在。');
  if(a==='cancel'){if((booking.user_id!==u.id&&u.role!=='admin')||!['pending','approved'].includes(booking.status))throw new Error('无法取消此预约。');const changed=await db().prepare("UPDATE bookings SET status='cancelled',cancelled_by=? WHERE id=? AND status IN ('pending','approved') RETURNING id").bind(u.id,booking.id).first();if(!changed)throw new Error('预约状态已改变，请刷新。');return json({ok:true});}

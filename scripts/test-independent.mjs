@@ -17,7 +17,7 @@ await call({action:'sendCode',email:'user@example.test'});let user=await call({a
 const jpg=new Uint8Array(131072);jpg.set([255,216,255]);assert.equal((await call({action:'profile',nickname:'头像测试',avatarData:'data:image/jpeg;base64,'+Buffer.from(jpg).toString('base64')},user.cookie)).status,200);const row=sql.prepare('SELECT * FROM avatars').get();assert.equal(Buffer.from(row.data,'base64').length,131072);
 const avatar=(await moduleFrom('app/api/avatar/route.ts',[["import {avatarStore} from '../../../lib/avatar-store';",'const avatarStore=globalThis.__avatarStore;'],["import {requestUser} from '../../../lib/request-user';",'const requestUser=globalThis.__requestUser;']])).GET;assert.equal((await avatar(new Request('https://test.invalid/api/avatar'))).status,401);const image=await avatar(new Request('https://test.invalid/api/avatar',{headers:{Cookie:user.cookie}}));assert.equal(image.status,200);assert.equal((await image.arrayBuffer()).byteLength,131072);assert.equal((await avatar(new Request('https://test.invalid/api/avatar?userId=wang-yida',{headers:{Cookie:user.cookie}}))).status,403);
 let manager=await call({action:'login',email:'siteadmin',password,managerLogin:true});assert.equal((await state(manager.cookie)).users.length,0);manager=await call({action:'password',oldPassword:password,password:'New-Manager-Pass-123'},manager.cookie);assert.equal((await call({action:'manageQuota',limit:3},manager.cookie)).status,200);assert.equal((await state(user.cookie)).weekLimit,3);assert.equal((await call({action:'manageQuota',limit:4},user.cookie)).status,403);
-const date=new Date(Date.now()+86400000*3).toISOString().slice(0,10);assert.equal((await call({action:'book',name:'测试用户',restaurant:'测试餐厅',mealAt:date+'T18:30'},user.cookie)).status,200);const booking=(await state(user.cookie)).bookings[0];assert.equal((await call({action:'approve',id:booking.id},wang.cookie)).status,200);await globalThis.__settleMeals(db,new Date(Date.parse(booking.meal_at)+86400000).toISOString());assert.equal((await state(user.cookie)).bookings[0].status,'completed');
+const date=new Date(Date.now()+86400000*24).toISOString().slice(0,10);assert.equal((await call({action:'book',name:'测试用户',restaurant:'测试餐厅',mealAt:date+'T18:30'},user.cookie)).status,200);const booking=(await state(user.cookie)).bookings[0];assert.equal((await call({action:'approve',id:booking.id},wang.cookie)).status,200);await globalThis.__settleMeals(db,new Date(Date.parse(booking.meal_at)+86400000).toISOString());assert.equal((await state(user.cookie)).bookings[0].status,'completed');
 const managerData=await state(manager.cookie);assert.ok(managerData.users.length===3);for(const u of managerData.users)assert.equal(u.password,undefined);assert.equal(globalThis.__env.BUCKET,undefined);
 console.log('PASS: standalone seeds and password changes, Wang email binding, registration, 128KiB D1 avatar roundtrip/access control, administrator quotas/role isolation, booking approval and 24-hour scheduled completion; no R2 or Sites credentials used.');
 
@@ -93,3 +93,23 @@ assert.equal(sql.prepare("SELECT count(*) n FROM mail_outbox WHERE status IN ('p
 const sent=attempts.slice(1);assert.equal(new Set(sent.map(a=>a.key)).size,sent.length);assert.ok(sent.some(a=>a.body.text.includes('收到新的放纵餐预约邀请')&&a.body.text.includes('测试地址')));
 assert.equal((await state(manager.cookie)).mailDeliveries.some(m=>m.status==='sent'),true);
 console.log('PASS: self records and negative quotas, immutable ownership, selected-week booking guards, cancellation/refunds, required calories and one-time supplement, manager edit/cancel and atomic cross-week rollback, totals, detailed email outbox and failure/concurrent retry safety.');
+
+// Transport/cost are optional, exact cents, and survive edits from older clients.
+const cost=globalThis.__mealFields.estimatedCostCents;
+assert.equal(cost('12.34'),1234);assert.equal(cost('0'),0);assert.equal(cost(''),null);assert.equal(cost('100000.00'),10000000);
+for(const bad of ['-1','1.001','100000.01','abc','Infinity'])assert.throws(()=>cost(bad));
+const travelId=crypto.randomUUID();await ok({action:'selfRecord',...selfFields,requestId:travelId,transportMode:'taxi',estimatedCost:'128.50'},wang.cookie);
+let travel=sql.prepare('SELECT * FROM bookings WHERE id=?').get(travelId);assert.equal(travel.transport_mode,'taxi');assert.equal(travel.estimated_cost_cents,12850);
+await ok({action:'manageBooking',id:travelId,...selfFields,notes:'兼容旧客户端'},manager.cookie);
+travel=sql.prepare('SELECT * FROM bookings WHERE id=?').get(travelId);assert.equal(travel.transport_mode,'taxi');assert.equal(travel.estimated_cost_cents,12850);
+assert.equal((await call({action:'selfRecord',...selfFields,transportMode:'invalid',estimatedCost:'12'},wang.cookie)).status,400);
+assert.equal((await call({action:'selfRecord',...selfFields,transportMode:'car',estimatedCost:'12.345'},wang.cookie)).status,400);
+await ok({action:'manageBooking',id:travelId,...selfFields,transportMode:'walking',estimatedCost:'0.00'},manager.cookie);
+travel=sql.prepare('SELECT * FROM bookings WHERE id=?').get(travelId);assert.equal(travel.transport_mode,'walking');assert.equal(travel.estimated_cost_cents,0);
+await ok({action:'manageBooking',id:travelId,...selfFields,transportMode:'',estimatedCost:''},manager.cookie);
+travel=sql.prepare('SELECT * FROM bookings WHERE id=?').get(travelId);assert.equal(travel.estimated_cost_cents,null);
+const farMeal=localTime(Date.now()+42*86400000);await ok({action:'book',...selfFields,mealAt:farMeal,transportMode:'public_transit',estimatedCost:'88.88'},otherSession.cookie);
+const trip=(await state(otherSession.cookie)).bookings.find(b=>b.status==='pending');assert.equal(trip.transport_mode,'public_transit');assert.equal(trip.estimated_cost_cents,8888);
+const notification=sql.prepare("SELECT message FROM notices WHERE booking_id=? AND user_id='wang-yida'").get(trip.id);assert.ok(notification.message.includes('公共交通')&&notification.message.includes('88.88 元/人'));
+await ok({action:'approve',id:trip.id},wang.cookie);const approvedNotice=sql.prepare("SELECT message FROM notices WHERE booking_id=? AND user_id=? ORDER BY id DESC").get(trip.id,other.id);assert.ok(approvedNotice.message.includes('公共交通')&&approvedNotice.message.includes('88.88'));
+console.log('PASS: exact-cent cost validation, optional historical values, native/web booking roundtrip, old-client edit preservation, zero/clear values and detailed notification content.');

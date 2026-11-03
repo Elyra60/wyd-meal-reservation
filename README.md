@@ -30,6 +30,7 @@
 - 每人同一时间只能有一笔待审批或已批准预约。
 - 可以申请未来一年内的自然周，是否满额按用餐日期所在周判断；本周满额不影响未来有名额的周。
 - 支持午餐、晚餐、夜宵，记录餐厅、日期、时间、人数、同行人及可选联系方式和备注。
+- 交通方式与预估人均消费可选填；人均消费以人民币元输入、最多两位小数，服务端按整数分存储，旧记录留空显示未填写。网页、原生安卓和管理员共用同一字段；审批、邀请等新增消息包含这两项信息。
 - 同行人逐行添加，仅填写了姓名的同行人才会参与自动人数计算，也可手动调整人数。
 - 日期输入自动补充斜杠；时间支持手动输入及选择。
 - 每周额度默认2次，管理员可设置默认额度或指定周的额度。
@@ -183,3 +184,7 @@ npm run build
 - [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Resend](https://resend.com/docs)
 - [高德地图 JS API](https://lbs.amap.com/api/javascript-api-v2/summary)
+
+## 原生安卓客户端
+
+原生 Android 2.1 的源码见 [android](android/README.md)。采用 Android Views 实现，不包含 WebView；直接复用本项目的 HTTPS API。新增交通方式与人均消费，并参照网页版分层展示预约卡片。APK 和签名备份在本地单独保存，签名密钥不入库。

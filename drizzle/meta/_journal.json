@@ -57,6 +57,13 @@
       "when": 1793428479999,
       "tag": "0007_meal_records_and_mail",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793715660506,
+      "tag": "0008_booking_transport_cost",
+      "breakpoints": true
     }
   ]
 }
