@@ -131,3 +131,5 @@ console.log('PASS: authenticated mobile-notice user isolation/cursors and range-
 
 const wholeAssets={async fetch(request){const url=new URL(request.url);if(url.pathname.endsWith('.json'))return Response.json(manifest);const index=Number(url.pathname.match(/part-(\d+)/)[1]);return new Response(new ReadableStream({start(controller){controller.enqueue(blocks[index].slice(0,3));controller.enqueue(blocks[index].slice(3));controller.close();}}));}};
 const fallback=await androidDownload(new Request('https://test.invalid/downloads/wyd-meal-reservation-2.2.0-native.apk',{headers:{Range:'bytes=2-7'}}),wholeAssets);assert.equal(await fallback.text(),'234567');console.log('PASS: asset bindings without Range support stream-skip correctly across APK parts.');
+
+await (await import("./test-push.mjs")).testPush({moduleFrom,sql,db,user,wang,otherSession,other,call,env:globalThis.__env});

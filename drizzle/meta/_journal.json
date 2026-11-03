@@ -64,6 +64,13 @@
       "when": 1793715660506,
       "tag": "0008_booking_transport_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793724630280,
+      "tag": "0009_mobile_push",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,27 @@
+{
+  "versionCode": 5,
+  "versionName": "2.3.0",
+  "minSdk": 26,
+  "apkUrl": "https://wyd-meal-reservation.online/downloads/wyd-meal-reservation-2.3.0-native.apk",
+  "bytes": 35808014,
+  "sha256": "036985e9257ec88298fcb0a12d88356125a906b6edc274f1e43d6797966e2253",
+  "notes": [
+    "接入极光基础即时推送，登录后同意开启并允许系统通知。",
+    "推送和后台检查共用去重，退出账号自动解绑。",
+    "华为／荣耀厂商通道待配置，进程被清理后可能延迟。"
+  ],
+  "parts": [
+    {
+      "path": "/android-packages/2.3.0/part-0.bin",
+      "bytes": 16777216
+    },
+    {
+      "path": "/android-packages/2.3.0/part-1.bin",
+      "bytes": 16777216
+    },
+    {
+      "path": "/android-packages/2.3.0/part-2.bin",
+      "bytes": 2253582
+    }
+  ]
+}
