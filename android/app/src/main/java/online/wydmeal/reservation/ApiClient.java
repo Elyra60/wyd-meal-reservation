@@ -43,7 +43,7 @@ public final class ApiClient {
  public byte[] avatar(String path)throws Exception{if(!path.startsWith("/api/avatar"))throw new IOException("头像地址无效");return request(path,null);}
  private synchronized byte[] request(String path,JSONObject value)throws Exception{
   if(!path.startsWith("/api/")||path.contains("://")||path.contains(".."))throw new IOException("请求地址无效");
-  HttpURLConnection c=(HttpURLConnection)new URL(ORIGIN+path).openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(15000);c.setReadTimeout(20000);c.setRequestProperty("Accept","application/json");c.setRequestProperty("User-Agent","WydMealNative/2.4 Android");c.setRequestProperty("Origin",ORIGIN);if(!cookie.isEmpty())c.setRequestProperty("Cookie",cookie);
+  HttpURLConnection c=(HttpURLConnection)new URL(ORIGIN+path).openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(15000);c.setReadTimeout(20000);c.setRequestProperty("Accept","application/json");c.setRequestProperty("User-Agent","WydMealNative/2.5 Android");c.setRequestProperty("Origin",ORIGIN);if(!cookie.isEmpty())c.setRequestProperty("Cookie",cookie);
   try{
    if(value!=null){c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json; charset=utf-8");try(OutputStream out=c.getOutputStream()){out.write(value.toString().getBytes("UTF-8"));}}
    int status=c.getResponseCode();if(status==401){clear();throw new SessionExpired();}

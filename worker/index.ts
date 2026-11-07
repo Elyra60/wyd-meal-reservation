@@ -14,9 +14,12 @@ export default {
   if(url.pathname==='/api/action')ctx.waitUntil(deliverNotifications(env).catch(()=>console.error('notification_delivery_failed')));
   return response;
  },
- async scheduled(event:ScheduledEvent,env:Cloudflare.Env){
-  await settleReviews(env.DB);
-  if(new Date(event.scheduledTime).getUTCMinutes()===0)await settleMeals(env.DB);
-  await deliverNotifications(env,50);
+ async scheduled(_event:ScheduledEvent,env:Cloudflare.Env){
+  // Drain queued mail even if one of the deadline checks fails.
+  const settlements=await Promise.allSettled([settleReviews(env.DB),settleMeals(env.DB)]);
+  const delivery=await deliverNotifications(env);
+  console.log(JSON.stringify({event:'scheduled_mail',sent:delivery.sent,mailReady:delivery.configured,
+   reviewCheck:settlements[0].status,bookingCheck:settlements[1].status}));
+  for(const result of settlements)if(result.status==='rejected')throw result.reason;
  }
 };

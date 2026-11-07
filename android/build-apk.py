@@ -64,7 +64,7 @@ if not key.exists():
  env={**os.environ,'WY_APK_STORE_PASSWORD':password}
  run(jdk/'keytool','-genkeypair','-keystore',key,'-storetype','PKCS12','-storepass:env','WY_APK_STORE_PASSWORD','-keypass:env','WY_APK_STORE_PASSWORD','-alias','wyd-release','-keyalg','RSA','-keysize','3072','-sigalg','SHA256withRSA','-validity','10000','-dname','CN=WYD Meal Reservation, O=WYD, C=CN',env=env)
 if not password_file.exists():raise RuntimeError('Signing password file missing; preserve the original key for updates.')
-output=build/'wyd-meal-reservation-2.4.0-native.apk'
+output=build/'wyd-meal-reservation-2.5.0-native.apk'
 signer=tools/'lib/apksigner.jar'
 run(java,'-jar',signer,'sign','--ks',key,'--ks-key-alias','wyd-release','--ks-pass','file:'+str(password_file),'--out',output,build/'aligned.apk')
 report=run(java,'-jar',signer,'verify','--verbose','--print-certs',output)

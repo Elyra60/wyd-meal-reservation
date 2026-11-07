@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-export async function testManagementReviews({sql,db,state,call,ok,wang,user,manager,otherSession,other,password,localTime,settleReviews}){
+export async function testManagementReviews({sql,db,state,call,ok,wang,user,manager,otherSession,other,password,localTime,settleReviews,avatar}){
  const userId=(await state(user.cookie)).user.id;
  assert.equal((await call({action:'manageGrant',id:userId,enabled:true},user.cookie)).status,403);
  await ok({action:'manageGrant',id:userId,enabled:true},manager.cookie);
@@ -44,6 +44,9 @@ export async function testManagementReviews({sql,db,state,call,ok,wang,user,mana
  await ok({action:'manageQuota',week:targetWeek,limit:0},manager.cookie);
  assert.equal((await call({action:'editBooking',id:managed,...fields,mealAt:blocked},user.cookie)).status,400);
  assert.equal(sql.prepare('SELECT week FROM approvals WHERE booking_id=?').get(managed).week,priorWeek);
+ const backdated=localTime(Date.now()-150*86400000);
+ await ok({action:'editBooking',id:managed,...fields,mealAt:backdated},user.cookie);
+ assert.equal((await state(user.cookie)).bookings.find(booking=>booking.id===managed).status,'completed');
 
  const record=crypto.randomUUID(),past=localTime(Date.now()-60*86400000);
  await ok({action:'manageAddRecord',...fields,mealAt:past,calories:450,requestId:record,userId},manager.cookie);
@@ -55,7 +58,7 @@ export async function testManagementReviews({sql,db,state,call,ok,wang,user,mana
  assert.ok(sql.prepare("SELECT 1 FROM notices WHERE user_id=? AND booking_id=? AND message LIKE '%撤销补录%'").get(userId,record));
 
  const reviewFields={action:'reviewCreate',food:'投票测试菜品',calories:500,deadline:localTime(Date.now()+3600000)};
- assert.equal((await call(reviewFields,user.cookie)).status,403);
+ assert.equal((await call(reviewFields,otherSession.cookie)).status,403);
  await ok(reviewFields,wang.cookie);
  const review=(await state(user.cookie)).reviews[0];
  assert.equal(review.food,reviewFields.food);
@@ -65,7 +68,13 @@ export async function testManagementReviews({sql,db,state,call,ok,wang,user,mana
  assert.equal((await call({action:'reviewVote',id:review.id,choice:'no'},user.cookie)).status,400);
  await ok({action:'reviewVote',id:review.id,choice:'no'},otherSession.cookie);
  await ok({action:'reviewComment',id:review.id,body:'大家都能看到这条留言'},user.cookie);
- assert.equal((await state(manager.cookie)).reviews[0].comments[0].body,'大家都能看到这条留言');
+ const comment=(await state(manager.cookie)).reviews[0].comments[0];
+ assert.equal(comment.body,'大家都能看到这条留言');
+ assert.equal(comment.author,'头像测试');
+ const imageUrl='https://test.invalid'+comment.avatarUrl;
+ assert.equal((await avatar(new Request(imageUrl))).status,401);
+ assert.equal((await avatar(new Request(imageUrl,{headers:{Cookie:otherSession.cookie}}))).status,200);
+ assert.equal((await avatar(new Request('https://test.invalid/api/avatar?reviewAuthor='+other.id,{headers:{Cookie:user.cookie}}))).status,404);
  sql.prepare('UPDATE meal_reviews SET deadline=? WHERE id=?').run(Date.now()-1000,review.id);
  assert.equal((await call({action:'reviewVote',id:review.id,choice:'yes'},manager.cookie)).status,400);
  await settleReviews(db);
@@ -77,6 +86,20 @@ export async function testManagementReviews({sql,db,state,call,ok,wang,user,mana
  await ok({action:'reviewVote',id:approved.id,choice:'yes'},manager.cookie);
  sql.prepare('UPDATE meal_reviews SET deadline=? WHERE id=?').run(Date.now()-1000,approved.id);
  assert.equal((await state(wang.cookie)).reviews.find(entry=>entry.id===approved.id).result,'allowed');
+ const laterDeadline=localTime(Date.now()+7200000);
+ assert.equal((await call({...reviewFields,action:'reviewEdit',id:review.id},otherSession.cookie)).status,403);
+ assert.equal((await call({action:'reviewDelete',id:review.id},wang.cookie)).status,403);
+ await ok({...reviewFields,action:'reviewEdit',id:review.id,food:'重新开放的评审',deadline:laterDeadline},user.cookie);
+ const reopened=(await state(otherSession.cookie)).reviews.find(item=>item.id===review.id);
+ assert.equal(reopened.result,'open');assert.equal(reopened.yes,1);assert.equal(reopened.no,1);
+ assert.equal(reopened.comments.length,1);
+ await ok({...reviewFields,food:'管理员代建的评审'},manager.cookie);
+ const added=(await state(user.cookie)).reviews.find(item=>item.food==='管理员代建的评审');
+ assert.equal(added.requester_id,'wang-yida');
+ await ok({action:'reviewDelete',id:review.id},manager.cookie);
+ assert.equal(sql.prepare('SELECT count(*) n FROM meal_review_comments WHERE review_id=?').get(review.id).n,0);
+ assert.equal(sql.prepare('SELECT count(*) n FROM meal_review_votes WHERE review_id=?').get(review.id).n,0);
+ assert.ok(!(await state(wang.cookie)).reviews.some(item=>item.id===review.id));
 
  await ok({action:'manageGrant',id:userId,enabled:false},manager.cookie);
  assert.equal((await state(user.cookie)).user.canManage,false);

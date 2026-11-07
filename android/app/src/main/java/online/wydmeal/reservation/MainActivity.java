@@ -19,7 +19,9 @@ import java.io.*;
 public final class MainActivity extends Activity {
  private NativeUi ui;private ApiClient api;private UpdateManager updates;private JSONObject data=new JSONObject(),user;private LinearLayout root,body,nav,header;private ScrollView scroll;private ProgressBar loading;
  private final ExecutorService worker=Executors.newSingleThreadExecutor();private final Handler handler=new Handler();private boolean busy,started,managing;private String tab="home",screen="",auth="login",filter="all";private JSONObject selected,draft=new JSONObject();
- private final LinkedHashMap<String,EditText> fields=new LinkedHashMap<>();private final HashMap<String,Spinner> choices=new HashMap<>();private final ArrayList<EditText> companions=new ArrayList<>();private JSONArray cacheUsers;private String avatarData;private ImageView avatarPreview;private Bitmap cachedAvatar;private String cachedAvatarPath="";
+ private final LinkedHashMap<String,EditText> fields=new LinkedHashMap<>();private final HashMap<String,Spinner> choices=new HashMap<>();private final ArrayList<EditText> companions=new ArrayList<>();private JSONArray cacheUsers;private String avatarData;private ImageView avatarPreview;
+ private final android.util.LruCache<String,Bitmap> avatarCache=new android.util.LruCache<>(24);
+ private final Map<String,List<ImageView>> loadingAvatars=new HashMap<>();
  private static final ZoneId CHINA=ZoneId.of("Asia/Shanghai");private static final int TEXT=InputType.TYPE_CLASS_TEXT,PASSWORD=TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD,NUMBER=InputType.TYPE_CLASS_NUMBER;private long lastRender;
  interface Work<T>{T run()throws Exception;}interface Done<T>{void accept(T result)throws Exception;}
  static JSONObject obj(Object... p){return ApiClient.object(p);}static String s(JSONObject o,String k){return o==null||o.isNull(k)?"":o.optString(k,"");}static JSONArray arr(JSONObject o,String k){JSONArray a=o.optJSONArray(k);return a==null?new JSONArray():a;}
@@ -73,7 +75,7 @@ public final class MainActivity extends Activity {
   navigation();lastRender=System.currentTimeMillis();
  }
  private View iconButton(String name,String description,Runnable action){FrameLayout b=new FrameLayout(this);b.setBackground(ui.shape(ui.bg,24));b.setContentDescription(description);b.setOnClickListener(v->action.run());b.addView(ui.icon(name,ui.primary),new FrameLayout.LayoutParams(-1,-1));return b;}
- private void menu(){PopupMenu menu=new PopupMenu(this,header.getChildAt(header.getChildCount()-1));menu.getMenu().add("同步最新数据").setOnMenuItemClickListener(i->{if(screen.isEmpty())load();else toast("请先保存或返回，避免丢失正在填写的内容。");return true;});menu.getMenu().add("关于应用").setOnMenuItemClickListener(i->{new AlertDialog.Builder(this).setTitle("王亦达放纵餐预约 2.4").setMessage("原生 Android 客户端\n账号与记录和网站同步\n消息与邮件沿用现有通知服务").setPositiveButton("知道了",null).show();return true;});menu.show();}
+ private void menu(){PopupMenu menu=new PopupMenu(this,header.getChildAt(header.getChildCount()-1));menu.getMenu().add("同步最新数据").setOnMenuItemClickListener(i->{if(screen.isEmpty())load();else toast("请先保存或返回，避免丢失正在填写的内容。");return true;});menu.getMenu().add("关于应用").setOnMenuItemClickListener(i->{new AlertDialog.Builder(this).setTitle("王亦达放纵餐预约 2.5").setMessage("原生 Android 客户端\n账号与记录和网站同步\n消息与邮件沿用现有通知服务").setPositiveButton("知道了",null).show();return true;});menu.show();}
  private void navigation(){nav=ui.row();nav.setBackgroundColor(ui.card);nav.setPadding(ui.dp(8),ui.dp(8),ui.dp(8),ui.dp(8));String[] keys={"home","bookings","records","messages","reviews"},labels={"概览","预约","记录","消息","大众评审"},icons={"home","calendar","fire","message","review"};for(int i=0;i<keys.length;i++){final String key=keys[i];LinearLayout item=ui.column();item.setGravity(Gravity.CENTER);boolean active=tab.equals(key);FrameLayout capsule=new FrameLayout(this);capsule.setBackground(ui.shape(active?ui.tonal:ui.card,24));capsule.addView(ui.icon(icons[i],active?ui.primary:ui.muted),new FrameLayout.LayoutParams(-1,-1));item.addView(capsule,new LinearLayout.LayoutParams(ui.dp(60),ui.dp(32)));TextView text=ui.text(labels[i],12,active?ui.primary:ui.muted,active);text.setGravity(Gravity.CENTER);ui.gap(item,5);item.addView(text);item.setContentDescription(labels[i]);item.setOnClickListener(v->{if(busy)return;tab=key;filter="all";render();});nav.addView(item,new LinearLayout.LayoutParams(0,ui.dp(72),1));}root.addView(nav);}
  private EditText field(LinearLayout parent,String key,String label,String initial,int type){EditText e=ui.input(parent,label,initial,type);fields.put(key,e);return e;}
  private boolean required(String... keys){for(String key:keys){EditText e=fields.get(key);if(e!=null&&e.getText().toString().trim().isEmpty()){e.setError("请填写此项");e.requestFocus();return false;}}return true;}
@@ -172,18 +174,36 @@ public final class MainActivity extends Activity {
  }
  private void loadAvatar(){loadAvatar(avatarPreview);}
  private void loadAvatar(ImageView target){
-  String path=s(user,"avatarUrl");
-  if(path.isEmpty()||target==null)return;
-  if(path.equals(cachedAvatarPath)&&cachedAvatar!=null){target.setImageBitmap(cachedAvatar);return;}
+  loadReviewAvatar(s(user,"avatarUrl"),target);
+ }
+ void loadReviewAvatar(String path,ImageView target){
+  if(path.isEmpty()||target==null||user==null)return;
+  String viewer=s(user,"id");
+  String key=viewer+":"+path;
+  Bitmap cached=avatarCache.get(key);
+  if(cached!=null){target.setImageBitmap(cached);return;}
+  List<ImageView> pending=loadingAvatars.get(key);
+  if(pending!=null){pending.add(target);return;}
+  loadingAvatars.put(key,new ArrayList<>(Collections.singletonList(target)));
   worker.execute(()->{
+   Bitmap picture=null;
    try{
     byte[] bytes=api.avatar(path);
-    Bitmap bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length);
-    handler.post(()->{
-     if(isDestroyed()||!path.equals(s(user,"avatarUrl")))return;
-     cachedAvatarPath=path;cachedAvatar=bitmap;target.setImageBitmap(bitmap);
-    });
+    BitmapFactory.Options size=new BitmapFactory.Options();
+    size.inJustDecodeBounds=true;
+    BitmapFactory.decodeByteArray(bytes,0,bytes.length,size);
+    size.inSampleSize=1;
+    while(Math.max(size.outWidth,size.outHeight)/size.inSampleSize>256)size.inSampleSize*=2;
+    size.inJustDecodeBounds=false;
+    picture=BitmapFactory.decodeByteArray(bytes,0,bytes.length,size);
    }catch(Exception ignored){}
+   Bitmap bitmap=picture;
+   handler.post(()->{
+    List<ImageView> targets=loadingAvatars.remove(key);
+    if(isDestroyed()||!viewer.equals(s(user,"id"))||bitmap==null||targets==null)return;
+    avatarCache.put(key,bitmap);
+    for(ImageView view:targets)if(view.isAttachedToWindow())view.setImageBitmap(bitmap);
+   });
   });
  }
  @Override protected void onActivityResult(int request,int result,Intent intent){super.onActivityResult(request,result,intent);if(request==102&&result==RESULT_OK&&intent!=null){try{JSONObject place=new JSONObject(intent.getStringExtra("place"));EditText name=fields.get("restaurant"),address=fields.get("address");if(name!=null)name.setText(s(place,"name"));if(address!=null)address.setText(s(place,"address"));draft.put("latitude",place.getDouble("lat"));draft.put("longitude",place.getDouble("lng"));draft.put("coordinateSystem","gcj02");}catch(Exception e){error("地点读取失败，请重新选择。");}}

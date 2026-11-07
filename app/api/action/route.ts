@@ -232,7 +232,7 @@ export async function POST(r:Request){try{
   if(f.mealAt!==booking.meal_at){
    const time=Date.parse(f.mealAt);
    if(booking.status==='completed'&&time>now)throw new Error('已完成的用餐不能改到未来。');
-   if(active&&(time<=now||time>now+366*86400000))throw new Error('请选择未来一年内的用餐时间。');
+   if(active&&time>now+366*86400000)throw new Error('用餐时间不能超过一年后。');
   }
   const kcal=managed&&booking.status==='completed'&&b.calories!==undefined&&b.calories!==''?calories(b.calories):booking.calories??null;
   const samePlace=f.address===booking.address&&f.restaurant===booking.restaurant;

@@ -1,0 +1,27 @@
+{
+  "versionCode": 8,
+  "versionName": "2.5.0",
+  "minSdk": 26,
+  "apkUrl": "https://wyd-meal-reservation.online/downloads/wyd-meal-reservation-2.5.0-native.apk",
+  "bytes": 34434594,
+  "sha256": "5fd320231ae6ee21baaa94c3429be3797e8c83b79d943c78c48128ebe9b78261",
+  "notes": [
+    "重做大众评审卡片，突出热量、倒计时、票数与结果，留言显示头像和昵称。",
+    "管理员可新增、修改和删除评审。预约编辑支持过去的时间。",
+    "后台每分钟检查待发邮件和到期事项。"
+  ],
+  "parts": [
+    {
+      "path": "/android-packages/2.5.0/part-0.bin",
+      "bytes": 16777216
+    },
+    {
+      "path": "/android-packages/2.5.0/part-1.bin",
+      "bytes": 16777216
+    },
+    {
+      "path": "/android-packages/2.5.0/part-2.bin",
+      "bytes": 880162
+    }
+  ]
+}

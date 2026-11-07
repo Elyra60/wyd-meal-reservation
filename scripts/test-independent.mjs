@@ -126,4 +126,35 @@ console.log('PASS: range-resumable streamed APK downloads including cross-part r
 const wholeAssets={async fetch(request){const url=new URL(request.url);if(url.pathname.endsWith('.json'))return Response.json(manifest);const index=Number(url.pathname.match(/part-(\d+)/)[1]);return new Response(new ReadableStream({start(controller){controller.enqueue(blocks[index].slice(0,3));controller.enqueue(blocks[index].slice(3));controller.close();}}));}};
 const fallback=await androidDownload(new Request('https://test.invalid/downloads/wyd-meal-reservation-2.2.0-native.apk',{headers:{Range:'bytes=2-7'}}),wholeAssets);assert.equal(await fallback.text(),'234567');console.log('PASS: asset bindings without Range support stream-skip correctly across APK parts.');
 
-await (await import("./test-management-reviews.mjs")).testManagementReviews({sql,db,state,call,ok,wang,user,manager,otherSession,other,password,localTime,settleReviews:globalThis.__mealReviews.settleReviews});
+await (await import("./test-management-reviews.mjs")).testManagementReviews({sql,db,state,call,ok,wang,user,manager,otherSession,other,password,localTime,settleReviews:globalThis.__mealReviews.settleReviews,avatar});
+
+// Invoke the production scheduler directly with no HTTP requests or signed-in users.
+globalThis.__deliverNotifications=deliverNotifications;
+const {default:scheduledWorker}=await moduleFrom('worker/index.ts',[
+ ["import {androidDownload} from '../lib/android-download';","const androidDownload=()=>{throw Error('unexpected HTTP request');};"],
+ ["import handler from 'vinext/server/fetch-handler';","const handler={fetch(){throw Error('unexpected HTTP request');}};"],
+ ["import {deliverNotifications} from '../lib/mail-notifications';","const deliverNotifications=globalThis.__deliverNotifications;"],
+ ["import {settleMeals} from '../lib/meal-lifecycle';","const settleMeals=globalThis.__settleMeals;"],
+ ["import {settleReviews} from '../lib/meal-reviews';","const {settleReviews}=globalThis.__mealReviews;"],
+]);
+const offlineReview=crypto.randomUUID();
+sql.prepare("INSERT INTO meal_reviews(id,requester_id,food,calories,deadline,created) VALUES(?,'wang-yida','离线发信测试',123,?,?)")
+ .run(offlineReview,Date.now()-1000,new Date().toISOString());
+const offlineBooking=trip.id,offlineMealAt=new Date(Date.now()-25*3600000).toISOString();
+sql.prepare("UPDATE bookings SET meal_at=?,restaurant='离线用餐测试' WHERE id=?").run(offlineMealAt,offlineBooking);
+sql.exec("UPDATE mail_outbox SET status='sent' WHERE status='pending'");
+const offlineMail=[];
+globalThis.fetch=async(url,options)=>{
+ assert.equal(url,'https://api.resend.com/emails');
+ offlineMail.push(JSON.parse(options.body).text);
+ return Response.json({id:'offline-test-mail'});
+};
+await scheduledWorker.scheduled({scheduledTime:Date.parse('2026-11-07T10:13:00Z')},globalThis.__env);
+assert.equal(sql.prepare('SELECT result FROM meal_reviews WHERE id=?').get(offlineReview).result,'denied');
+assert.equal(sql.prepare('SELECT status FROM bookings WHERE id=?').get(offlineBooking).status,'completed');
+assert.ok(offlineMail.some(message=>message.includes('离线发信测试')));
+assert.ok(offlineMail.some(message=>message.includes('离线用餐测试')));
+const deliveryCount=offlineMail.length;
+await scheduledWorker.scheduled({scheduledTime:Date.parse('2026-11-07T10:14:00Z')},globalThis.__env);
+assert.equal(offlineMail.length,deliveryCount);
+console.log('PASS: scheduled review and booking settlement send mail without HTTP activity; rerun sends no duplicates.');
