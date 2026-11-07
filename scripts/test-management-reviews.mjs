@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+
+export async function testManagementReviews({sql,db,state,call,ok,wang,user,manager,otherSession,other,password,localTime,settleReviews}){
+ const userId=(await state(user.cookie)).user.id;
+ assert.equal((await call({action:'manageGrant',id:userId,enabled:true},user.cookie)).status,403);
+ await ok({action:'manageGrant',id:userId,enabled:true},manager.cookie);
+ let delegated=await state(user.cookie);
+ assert.equal(delegated.user.role,'user');
+ assert.equal(delegated.user.canManage,true);
+ assert.ok(delegated.management.users.some(account=>account.id===other.id));
+ assert.ok(delegated.bookings.every(booking=>booking.user_id===userId));
+ assert.equal((await call({action:'manageGrant',id:other.id,enabled:true},user.cookie)).status,403);
+ assert.equal((await call({action:'manageResetPassword',id:'site-manager',password:'Temporary-Password-123'},user.cookie)).status,403);
+ assert.equal((await call({action:'manageUser',id:'wang-yida',email:'fake@example.test'},user.cookie)).status,403);
+
+ const future=localTime(Date.now()+80*86400000);
+ const futureWeek=localTime(Date.now()+87*86400000);
+ const fields={name:'王亦达',restaurant:'申请测试餐厅',mealAt:future,mealType:'dinner',partySize:2};
+ await ok({action:'book',...fields},wang.cookie);
+ const wangBooking=(await state(wang.cookie)).bookings.find(booking=>booking.user_id==='wang-yida'&&booking.status==='pending');
+ assert.ok(wangBooking);
+ assert.ok(sql.prepare("SELECT 1 FROM notices WHERE user_id='site-manager' AND booking_id=?").get(wangBooking.id));
+ assert.equal((await call({action:'approve',id:wangBooking.id},wang.cookie)).status,403);
+ assert.equal((await call({action:'approve',id:wangBooking.id},otherSession.cookie)).status,403);
+ await ok({action:'editBooking',id:wangBooking.id,revision:wangBooking.revision,...fields,notes:'先修改再批准'},wang.cookie);
+ assert.equal((await call({action:'approve',id:wangBooking.id,revision:wangBooking.revision},user.cookie)).status,400);
+ await ok({action:'approve',id:wangBooking.id,revision:wangBooking.revision+1},user.cookie);
+ const changed=await ok({action:'editBooking',id:wangBooking.id,...fields,mealAt:futureWeek},wang.cookie);
+ assert.equal(changed.status,200);
+ assert.equal(sql.prepare('SELECT week FROM approvals WHERE booking_id=?').get(wangBooking.id).week,sql.prepare('SELECT week FROM bookings WHERE id=?').get(wangBooking.id).week);
+ assert.equal((await call({action:'editBooking',id:wangBooking.id,...fields},otherSession.cookie)).status,403);
+
+ const managed=crypto.randomUUID();
+ await ok({action:'manageAddBooking',userId,requestId:managed,...fields,name:'代办预约'},user.cookie);
+ const created=(await state(user.cookie)).bookings.find(booking=>booking.id===managed);
+ assert.equal(created.status,'pending');
+ assert.equal((await call({action:'approve',id:managed},user.cookie)).status,403);
+ await ok({action:'approve',id:managed},wang.cookie);
+ await ok({action:'editBooking',id:managed,...fields,restaurant:'获批后改餐厅'},user.cookie);
+ assert.ok(sql.prepare("SELECT 1 FROM notices WHERE user_id='wang-yida' AND booking_id=? AND message LIKE '%获批后改餐厅%'").get(managed));
+ const priorWeek=sql.prepare('SELECT week FROM approvals WHERE booking_id=?').get(managed).week;
+ const blocked=localTime(Date.now()+100*86400000);
+ const targetWeek=globalThis.__mealFields.mealWeek(new Date(blocked+'+08:00'));
+ await ok({action:'manageQuota',week:targetWeek,limit:0},manager.cookie);
+ assert.equal((await call({action:'editBooking',id:managed,...fields,mealAt:blocked},user.cookie)).status,400);
+ assert.equal(sql.prepare('SELECT week FROM approvals WHERE booking_id=?').get(managed).week,priorWeek);
+
+ const record=crypto.randomUUID(),past=localTime(Date.now()-60*86400000);
+ await ok({action:'manageAddRecord',...fields,mealAt:past,calories:450,requestId:record,userId},manager.cookie);
+ assert.equal(sql.prepare('SELECT status FROM bookings WHERE id=?').get(record).status,'completed');
+ await ok({action:'manageBooking',id:record,...fields,mealAt:past,calories:470},user.cookie);
+ assert.equal(sql.prepare('SELECT calories FROM bookings WHERE id=?').get(record).calories,470);
+ assert.equal((await call({action:'editBooking',id:record,...fields},user.cookie)).status,403);
+ await ok({action:'manageCancel',id:record,reason:'核对后撤销补录'},user.cookie);
+ assert.ok(sql.prepare("SELECT 1 FROM notices WHERE user_id=? AND booking_id=? AND message LIKE '%撤销补录%'").get(userId,record));
+
+ const reviewFields={action:'reviewCreate',food:'投票测试菜品',calories:500,deadline:localTime(Date.now()+3600000)};
+ assert.equal((await call(reviewFields,user.cookie)).status,403);
+ await ok(reviewFields,wang.cookie);
+ const review=(await state(user.cookie)).reviews[0];
+ assert.equal(review.food,reviewFields.food);
+ assert.equal((await call({action:'reviewComment',id:review.id,body:'先投票'},user.cookie)).status,400);
+ assert.equal((await call({action:'reviewVote',id:review.id,choice:'yes'},wang.cookie)).status,403);
+ await ok({action:'reviewVote',id:review.id,choice:'yes'},user.cookie);
+ assert.equal((await call({action:'reviewVote',id:review.id,choice:'no'},user.cookie)).status,400);
+ await ok({action:'reviewVote',id:review.id,choice:'no'},otherSession.cookie);
+ await ok({action:'reviewComment',id:review.id,body:'大家都能看到这条留言'},user.cookie);
+ assert.equal((await state(manager.cookie)).reviews[0].comments[0].body,'大家都能看到这条留言');
+ sql.prepare('UPDATE meal_reviews SET deadline=? WHERE id=?').run(Date.now()-1000,review.id);
+ assert.equal((await call({action:'reviewVote',id:review.id,choice:'yes'},manager.cookie)).status,400);
+ await settleReviews(db);
+ await settleReviews(db);
+ assert.equal((await state(wang.cookie)).reviews[0].result,'denied');
+ assert.equal(sql.prepare("SELECT count(*) n FROM notices WHERE user_id='wang-yida' AND message LIKE '大众评审%'").get().n,1);
+ await ok({...reviewFields,food:'同意票测试'},wang.cookie);
+ const approved=(await state(user.cookie)).reviews.find(entry=>entry.food==='同意票测试');
+ await ok({action:'reviewVote',id:approved.id,choice:'yes'},manager.cookie);
+ sql.prepare('UPDATE meal_reviews SET deadline=? WHERE id=?').run(Date.now()-1000,approved.id);
+ assert.equal((await state(wang.cookie)).reviews.find(entry=>entry.id===approved.id).result,'allowed');
+
+ await ok({action:'manageGrant',id:userId,enabled:false},manager.cookie);
+ assert.equal((await state(user.cookie)).user.canManage,false);
+ assert.equal((await state(user.cookie)).management,undefined);
+ assert.equal((await call({action:'manageAddBooking',...fields,userId},user.cookie)).status,403);
+
+ const target=(await state(manager.cookie)).users.find(account=>account.id===other.id);
+ await ok({action:'manageUser',id:other.id,username:target.username,nickname:'测试昵称',email:'changed@example.test'},manager.cookie);
+ assert.equal((await state(otherSession.cookie)).user,null);
+ const prior=await call({action:'login',email:'changed@example.test',password});
+ assert.equal(prior.status,200);
+ const temporary='Temporary-Password-123';
+ await ok({action:'manageResetPassword',id:other.id,password:temporary},manager.cookie);
+ assert.equal((await state(prior.cookie)).user,null);
+ const reset=await call({action:'login',email:'changed@example.test',password:temporary});
+ assert.equal(reset.status,200);
+ assert.equal((await state(reset.cookie)).user.mustChange,true);
+ assert.equal((await call({action:'reviewVote',id:review.id,choice:'yes'},reset.cookie)).status,400);
+ assert.equal(JSON.stringify(await state(manager.cookie)).includes(temporary),false);
+ assert.equal(sql.prepare('SELECT count(*) n FROM push_outbox').get().n,0);
+ console.log('PASS: dual-role grants/revocation, account protections, password reset and email change, Wang approval routing, manager creation, requester edits/notifications/quota rollback, review votes/comments/deadlines/results, and push disabled.');
+}

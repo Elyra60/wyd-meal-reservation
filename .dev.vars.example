@@ -5,7 +5,3 @@ RESEND_API_KEY=
 MAIL_FROM=
 AMAP_JS_KEY=
 AMAP_SECURITY_CODE=
-
-# Optional Android push: server secrets only, never expose Master Secret in clients.
-JPUSH_APP_KEY=
-JPUSH_MASTER_SECRET=

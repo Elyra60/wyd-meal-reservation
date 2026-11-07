@@ -65,3 +65,13 @@ body{font-size:15px}.page-heading h1{font-size:clamp(22px,2vw,28px)}.booking h3{
 @media(max-width:760px){.sidebar nav{display:flex;overflow-x:auto;gap:8px}.sidebar nav button{min-width:80px;flex:1 0 80px;padding:10px 8px}.calorie-reminder{align-items:flex-start;flex-direction:column}.week-history-row{font-size:13px}}
 
 .record-planning{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 20px;margin-top:12px;border:1px solid #dce6d5;border-radius:8px;background:#fafcf7}.record-planning small{display:block;font-size:12px;color:#5c7052;margin-bottom:6px}.record-planning strong{display:block;color:#24432e;font-size:17px;overflow-wrap:anywhere}@media(max-width:600px){.record-planning{padding:14px;gap:12px}.record-planning strong{font-size:16px}}
+.review-card h2,.review-card p{overflow-wrap:anywhere}
+.review-countdown,.review-votes,.review-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.review-countdown{font-variant-numeric:tabular-nums;color:var(--muted)}
+.review-votes{font-weight:600;margin:12px 0}
+.review-actions{margin:12px 0}
+.review-comments{margin-top:20px;padding-top:14px;border-top:1px solid var(--line)}
+.review-comments article{padding:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.review-comments article p{margin:4px 0 0}
+.account-avatar{display:inline-grid;place-items:center;cursor:pointer}
+.profile>.account-avatar,.topbar .account-avatar{padding:0}

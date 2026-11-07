@@ -2,6 +2,7 @@ import {mealFields,calories,mealWeek} from '../../../lib/meal-fields';
 import {avatarStore} from '../../../lib/avatar-store';
 import { env } from 'cloudflare:workers';
 import { settleMeals } from '../../../lib/meal-lifecycle';
+import { listReviews, reviewAction, settleReviews } from '../../../lib/meal-reviews';
 const FULL='所选用餐周的放纵餐名额已满，请选择其他周。';
 const E={...(env as any),BUCKET:avatarStore((env as any).DB)}; const db=()=>E.DB;
 const json=(x:any,status=200,cookie?:string)=>Response.json(x,{status,headers:{'Cache-Control':'no-store',...(cookie?{'Set-Cookie':cookie}:{})}});
@@ -13,6 +14,15 @@ const capSql=(w:string)=>`COALESCE((SELECT meal_limit FROM weekly_limits WHERE w
 const quota=async(w:string)=>Number((await db().prepare('SELECT '+capSql('?')+' AS n').bind(w).first()).n);
 const audit=(u:any,action:string,target:string,details:any)=>db().prepare('INSERT INTO audit_log(actor,action,target,details,created) VALUES(?,?,?,?,?)').bind(u.id,action,target,JSON.stringify(details),new Date().toISOString());
 const week=mealWeek;
+const canManage=(u:any)=>u.role==='manager'||(u.role==='user'&&u.can_manage===1);
+const canEditAccount=(actor:any,target:any)=>actor.role==='manager'||(target.role==='user'&&!target.can_manage);
+const isWang=(u:any)=>u.id==='wang-yida'&&u.role==='admin';
+const publicUser=(u:any)=>({
+ id:u.id,email:u.email,role:u.role,username:u.username,usernameChangedAt:u.username_changed_at,
+ mustBindEmail:isWang(u)&&!u.email.includes('@'),mustChange:!!u.must_change,
+ canManage:canManage(u),canGrant:u.role==='manager',nickname:u.nickname||'',
+ avatarUrl:u.avatar_key?'/api/avatar?v='+encodeURIComponent(u.avatar_key):null
+});
 const cookie=(token:string,age=604800)=>`meal_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${age}`;
 async function identity(r:Request){const t=r.headers.get('cookie')?.match(/(?:^|;\s*)meal_session=([^;]+)/)?.[1];const user=t?await db().prepare('SELECT u.* FROM users u JOIN sessions s ON u.id=s.user_id WHERE s.token=? AND s.expires>?').bind(await hash(t),Date.now()).first():null;return user?.disabled?null:user;}
 async function limit(key:string,max:number){const k=await hash(key+':'+Math.floor(Date.now()/600000));const r=await db().prepare('INSERT INTO rates(key,count) VALUES (?,1) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(k).first();if(r.count>max)throw new Error('操作过于频繁，请十分钟后再试。');}
@@ -31,7 +41,39 @@ async function mealData(u:any){
  db().prepare("SELECT count(*) AS meals,COALESCE(sum(calories),0) AS totalCalories,sum(CASE WHEN calories IS NULL THEN 1 ELSE 0 END) AS missingCalories,COALESCE(sum(CASE WHEN week=? THEN calories ELSE 0 END),0) AS weekCalories FROM bookings WHERE status='completed'"+scoped).bind(w,...args).first()]);
  return {quotas:q.results,weeklyLimits:limits.results,mealStats:stats,week:w,weekLimit:await quota(w)};
 }
-export async function GET(r:Request){try{await prepareAccounts();const u=await identity(r);if(!u)return json({user:null,mailReady:!!(E.RESEND_API_KEY&&E.MAIL_FROM)});if(u.role==='admin'&&!u.email.includes('@'))return json({user:{id:u.id,email:u.email,username:u.username,role:u.role,mustChange:!!u.must_change,mustBindEmail:true},mailReady:!!(E.RESEND_API_KEY&&E.MAIL_FROM)});if(u.role==='manager'){await settleMeals(db());const users=u.must_change?{results:[]}:await db().prepare('SELECT id,email,username,role,nickname,avatar_key,username_changed_at,disabled FROM users ORDER BY role,username').all();const bookings=u.must_change?{results:[]}:await db().prepare('SELECT * FROM bookings ORDER BY created DESC').all();const notices=u.must_change?{results:[]}:await db().prepare('SELECT * FROM notices ORDER BY created DESC').all();return json({...(u.must_change?{}:await mealData(u)),mailDeliveries:u.must_change?[]:(await db().prepare('SELECT id,notice_id,recipient,status,attempts,last_error,sent_at FROM mail_outbox ORDER BY id DESC LIMIT 100').all()).results,user:{id:u.id,email:u.email,username:u.username,role:u.role,mustChange:!!u.must_change},weeklyLimits:u.must_change?[]:(await db().prepare('SELECT * FROM weekly_limits ORDER BY week DESC').all()).results,audit:u.must_change?[]:(await db().prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 300').all()).results,users:users.results,bookings:bookings.results,notices:notices.results,mailReady:!!(E.RESEND_API_KEY&&E.MAIL_FROM)});}await settleMeals(db());const w=week();const [b,n,q]=await Promise.all([db().prepare(u.role==='admin'?'SELECT * FROM bookings ORDER BY created DESC':'SELECT * FROM bookings WHERE user_id=? ORDER BY created DESC').bind(...(u.role==='admin'?[]:[u.id])).all(),db().prepare('SELECT * FROM notices WHERE user_id=? ORDER BY id DESC LIMIT 100').bind(u.id).all(),db().prepare("SELECT a.week,count(*) AS count,sum(CASE WHEN b.status='completed' THEN 1 ELSE 0 END) AS used,sum(CASE WHEN b.status='approved' THEN 1 ELSE 0 END) AS reserved FROM approvals a JOIN bookings b ON b.id=a.booking_id GROUP BY a.week").all()]);return json({...await mealData(u),user:{id:u.id,email:u.email,role:u.role,username:u.username,usernameChangedAt:u.username_changed_at,mustBindEmail:false,mustChange:!!u.must_change,nickname:u.nickname||'',avatarUrl:u.avatar_key?'/api/avatar?v='+encodeURIComponent(u.avatar_key):null},bookings:b.results,notices:n.results,quotas:q.results,week:w,weekLimit:await quota(w),mailReady:!!(E.RESEND_API_KEY&&E.MAIL_FROM)});}catch{return json({error:'读取失败，请稍后重试。'},503);}}
+async function managementData(u:any,shared:any){
+ const [users,bookings,notices,mailDeliveries,history]=await db().batch([
+  db().prepare('SELECT id,email,username,role,nickname,avatar_key,username_changed_at,disabled,can_manage,must_change FROM users ORDER BY role,username'),
+  db().prepare('SELECT * FROM bookings ORDER BY created DESC'),
+  db().prepare('SELECT * FROM notices ORDER BY id DESC'),
+  db().prepare('SELECT id,notice_id,recipient,status,attempts,last_error,sent_at FROM mail_outbox ORDER BY id DESC LIMIT 100'),
+  db().prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 300'),
+ ]);
+ return {...shared,mealStats:(await mealData({role:'manager'})).mealStats,
+  users:users.results.map((target:any)=>({...target,canEditAccount:canEditAccount(u,target)})),
+  bookings:bookings.results,notices:notices.results,mailDeliveries:mailDeliveries.results,audit:history.results};
+}
+
+export async function GET(request:Request){
+ try{
+  await prepareAccounts();
+  const u=await identity(request);
+  const mailReady=!!(E.RESEND_API_KEY&&E.MAIL_FROM);
+  if(!u)return json({user:null,mailReady});
+  const user=publicUser(u);
+  if(user.mustBindEmail||user.mustChange)return json({user,mailReady,users:[],bookings:[],notices:[],reviews:[]});
+  await Promise.all([settleMeals(db()),settleReviews(db())]);
+  const shared={...await mealData(u),user,mailReady};
+  const reviews=await listReviews(db(),u.id);
+  if(u.role==='manager')return json({...await managementData(u,shared),reviews});
+  const bookings=await db().prepare(isWang(u)
+   ?'SELECT * FROM bookings ORDER BY created DESC'
+   :'SELECT * FROM bookings WHERE user_id=? ORDER BY created DESC').bind(...(isWang(u)?[]:[u.id])).all();
+  const notices=await db().prepare('SELECT * FROM notices WHERE user_id=? ORDER BY id DESC LIMIT 100').bind(u.id).all();
+  return json({...shared,bookings:bookings.results,notices:notices.results,reviews,
+   ...(canManage(u)?{management:await managementData(u,shared)}:{})});
+ }catch{return json({error:'读取失败，请稍后重试。'},503);}
+}
 export async function POST(r:Request){try{
  if(r.headers.get('origin')!==new URL(r.url).origin)return json({error:'请求来源无效'},403);
  await prepareAccounts();if(Number(r.headers.get('content-length')||0)>220000)return json({error:'上传内容过大。'},413);await settleMeals(db());const raw=await r.text();if(raw.length>220000)return json({error:'上传内容过大。'},413);const b=JSON.parse(raw) as any;const a=b.action;const p=String(b.password||'');const email=String(b.email||'').trim().toLowerCase();const now=Date.now();
@@ -39,7 +81,7 @@ export async function POST(r:Request){try{
  if(a==='login'){
   await limit('login:'+email,10);
 
-  await prepareAccounts();const u=await db().prepare("SELECT * FROM users WHERE username=? OR (email=? AND email LIKE '%@%')").bind(email,email).first();const h=u?.password||E.WY_INITIAL_HASH;if(!h||!equal(await password(p,h.split(':')[0]),h)||!u)throw new Error('账号或密码不正确。');if(u.disabled)throw new Error('账号已被停用，请联系管理员。');if(b.managerLogin&&u.role!=='manager')throw new Error('请使用管理员账号登录此入口。');return session(u);
+  await prepareAccounts();const u=await db().prepare("SELECT * FROM users WHERE username=? OR (email=? AND email LIKE '%@%')").bind(email,email).first();const h=u?.password||E.WY_INITIAL_HASH;if(!h||!equal(await password(p,h.split(':')[0]),h)||!u)throw new Error('账号或密码不正确。');if(u.disabled)throw new Error('账号已被停用，请联系管理员。');if(b.managerLogin&&!canManage(u))throw new Error('请使用管理员账号登录此入口。');return session(u);
  }
  if(a==='sendCode'||a==='verify'){
   if(!E.RESEND_API_KEY||!E.MAIL_FROM)return json({error:'邮箱服务尚未配置，注册和找回密码暂未开放。'},503);
@@ -96,57 +138,151 @@ export async function POST(r:Request){try{
   const verified=await db().prepare('DELETE FROM challenges WHERE email=? AND purpose=? AND code=? AND expires>? RETURNING email').bind(email,purpose,await hash(String(b.code||'')),now).first();if(!verified)throw new Error('验证码错误、已过期或不属于当前账号。');
   try{await db().batch([db().prepare('UPDATE users SET email=? WHERE id=?').bind(email,u.id),db().prepare('DELETE FROM sessions WHERE user_id=?').bind(u.id)]);}catch{throw new Error('邮箱更换失败，该邮箱可能已被使用，请重新验证。');}return session(u);
  }
+ if(typeof a!=='string')return json({error:'无效操作。'},400);
+ if(a.startsWith('review')){
+  await limit('review:'+u.id,80);
+  const status=await reviewAction(db(),u,a,b);
+  return status===200?json({ok:true}):json({error:'此账号无权执行该评审操作。'},status);
+ }
  if(a.startsWith('manage')){
- if(u.role!=='manager')return json({error:'仅管理员可执行此操作。'},403);await limit('manage:'+u.id,80);
+  if(!canManage(u))return json({error:'仅管理员可执行此操作。'},403);
+  await limit('manage:'+u.id,80);
+ }
+ if(a==='manageGrant'){
+  if(u.role!=='manager')return json({error:'仅主管理员可绑定或解绑管理员账号。'},403);
+  if(typeof b.enabled!=='boolean')throw new Error('请选择是否绑定。');
+  const target=await db().prepare("SELECT id,can_manage FROM users WHERE id=? AND role='user' AND (disabled=0 OR ?=0)").bind(String(b.id),Number(b.enabled)).first();
+  if(!target)throw new Error('请选择未停用的普通账号。');
+  await db().batch([
+   db().prepare("UPDATE users SET can_manage=? WHERE id=? AND role='user' AND (disabled=0 OR ?=0)").bind(Number(b.enabled),target.id,Number(b.enabled)),
+   audit(u,a,target.id,{enabled:b.enabled})
+  ]);
+  return json({ok:true});
+ }
+ if(a==='manageResetPassword'){
+  const target=await db().prepare('SELECT id,role,can_manage FROM users WHERE id=?').bind(String(b.id)).first();
+  if(!target||!canEditAccount(u,target)||target.id===u.id)return json({error:'请使用有权管理该账号的主管理员，自己的密码请在个人主页修改。'},403);
+  if(p.length<10||p.length>128)throw new Error('临时密码须为 10–128 位。');
+  await db().batch([
+   db().prepare('UPDATE users SET password=?,must_change=1 WHERE id=?').bind(await password(p),target.id),
+   db().prepare('DELETE FROM sessions WHERE user_id=?').bind(target.id),
+   audit(u,a,target.id,{reset:true})
+  ]);
+  return json({ok:true});
+ }
  if(a==='manageQuota'){const w=String(b.week||'default'),n=Number(b.limit);if(w!=='default'&&(!/^\d{4}-\d{2}-\d{2}$/.test(w)||week(new Date(w+'T00:00:00+08:00'))!==w))throw new Error('请选择有效的周一日期。');if(!Number.isInteger(n)||n<0||n>100)throw new Error('额度须为0至100的整数，0表示暂停预约。');const previous=await db().prepare('SELECT * FROM weekly_limits WHERE week=?').bind(w).first();await db().batch([db().prepare('INSERT INTO weekly_limits(week,meal_limit) VALUES(?,?) ON CONFLICT(week) DO UPDATE SET meal_limit=excluded.meal_limit').bind(w,n),audit(u,a,w,{before:previous,after:n})]);return json({ok:true});}
- if(a==='manageUser'){const target=await db().prepare('SELECT id,username,email,nickname,role,disabled FROM users WHERE id=?').bind(String(b.id)).first();if(!target)throw new Error('用户不存在。');const username=String(b.username||'').trim().toLowerCase(),nickname=String(b.nickname||'').trim(),mail=String(b.email||'').trim().toLowerCase(),disabled=b.disabled===true?1:0;if(username!==target.username&&!validUsername(username))throw new Error('用户名格式无效或不可使用。');if(nickname.length>30)throw new Error('昵称最多30字。');if(mail!==target.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail))throw new Error('请输入有效邮箱。');if(target.role!=='user'&&disabled)throw new Error('不能停用王亦达或管理员账号。');const next={username,email:mail,nickname,disabled};await db().batch([db().prepare('UPDATE users SET username=?,email=?,nickname=?,disabled=?,username_changed_at=CASE WHEN username!=? THEN ? ELSE username_changed_at END WHERE id=?').bind(username,mail,nickname,disabled,username,now,target.id),db().prepare('DELETE FROM sessions WHERE user_id=? AND user_id!=?').bind(target.id,u.id),audit(u,a,target.id,{before:target,after:next})]);return json({ok:true});}
- const target=await db().prepare('SELECT * FROM bookings WHERE id=?').bind(String(b.id)).first();if(!target)throw new Error('预约不存在。');
- if(a==='manageCancel'){
-  if(!['pending','approved','completed'].includes(target.status))throw new Error('这份记录已经结束或取消。');
-  const reason=String(b.reason||'').trim();if(!reason||reason.length>300)throw new Error('请填写300字以内的取消原因。');
-  await db().batch([db().prepare('UPDATE bookings SET id=CASE WHEN status=? THEN id ELSE NULL END WHERE id=?').bind(target.status,target.id),db().prepare("UPDATE bookings SET status='cancelled',cancelled_by=?,reason=? WHERE id=?").bind(u.id,reason,target.id),audit(u,a,target.id,{before:target,reason})]);return json({ok:true});
+ if(a==='manageUser'){const target=await db().prepare('SELECT id,username,email,nickname,role,disabled,can_manage FROM users WHERE id=?').bind(String(b.id)).first();if(!target)throw new Error('用户不存在。');if(!canEditAccount(u,target))return json({error:'仅主管理员可修改此账号。'},403);const username=String(b.username||'').trim().toLowerCase(),nickname=String(b.nickname||'').trim(),mail=String(b.email||'').trim().toLowerCase(),disabled=b.disabled===true?1:0;if(username!==target.username&&!validUsername(username))throw new Error('用户名格式无效或不可使用。');if(nickname.length>30)throw new Error('昵称最多30字。');if(mail!==target.email&&(mail.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)))throw new Error('请输入有效邮箱。');if(target.role!=='user'&&disabled)throw new Error('不能停用王亦达或管理员账号。');const next={username,email:mail,nickname,disabled};await db().batch([db().prepare('UPDATE users SET username=?,email=?,nickname=?,disabled=?,username_changed_at=CASE WHEN username!=? THEN ? ELSE username_changed_at END WHERE id=?').bind(username,mail,nickname,disabled,username,now,target.id),db().prepare('DELETE FROM sessions WHERE user_id=? AND user_id!=?').bind(target.id,u.id),audit(u,a,target.id,{before:target,after:next})]);return json({ok:true});}
+ if(a==='read'){
+  await db().prepare('UPDATE notices SET read=1 WHERE user_id=?').bind(u.id).run();
+  return json({ok:true});
  }
- if(a==='manageBooking'){
-  const f=mealFields({...b,transportMode:b.transportMode??target.transport_mode,estimatedCost:b.estimatedCost===undefined?(target.estimated_cost_cents==null?'':String(target.estimated_cost_cents/100)):b.estimatedCost},'edit'),dt=new Date(f.mealAt),changedTime=f.mealAt!==target.meal_at;
-  if(changedTime&&target.status==='completed'&&dt.getTime()>now)throw new Error('已完成的用餐不能改到未来。');
-  if(changedTime&&['pending','approved'].includes(target.status)&&dt.getTime()<=now)throw new Error('未完成预约只能改到未来。');
-  const kcal=target.status==='completed'?calories(b.calories):target.calories??null;
-  const move=f.week!==target.week&&['approved','completed'].includes(target.status);
-  const queries=[db().prepare('UPDATE bookings SET id=CASE WHEN status=? AND meal_at=? THEN id ELSE NULL END WHERE id=?').bind(target.status,target.meal_at,target.id)];
-  if(move)queries.push(db().prepare('DELETE FROM approvals WHERE booking_id=?').bind(target.id));
-  if(target.status==='pending')queries.push(db().prepare('UPDATE bookings SET id=CASE WHEN (SELECT count(*) FROM approvals WHERE week=?)<'+capSql('?')+' THEN id ELSE NULL END WHERE id=?').bind(f.week,f.week,target.id));
-  queries.push(db().prepare('UPDATE bookings SET name=?,restaurant=?,address=?,companions=?,contact=?,notes=?,party_size=?,meal_type=?,meal_at=?,week=?,calories=?,transport_mode=?,estimated_cost_cents=?,latitude=CASE WHEN address!=? OR restaurant!=? THEN NULL ELSE latitude END,longitude=CASE WHEN address!=? OR restaurant!=? THEN NULL ELSE longitude END WHERE id=?').bind(f.name,f.restaurant,f.address,f.companions,f.contact,f.notes,f.partySize,f.mealType,f.mealAt,f.week,kcal,f.transportMode,f.estimatedCostCents,f.address,f.restaurant,f.address,f.restaurant,target.id));
-  if(move)queries.push(db().prepare('INSERT INTO approvals(booking_id,week,slot) VALUES(?,?,COALESCE((SELECT max(slot)+1 FROM approvals WHERE week=?),1))').bind(target.id,f.week,f.week));
-  queries.push(audit(u,a,target.id,{before:target,after:{...f,calories:kcal}}));await db().batch(queries);return json({ok:true});
- }
- return json({error:'无效管理操作。'},400);
- }
- if(u.role==='manager')return json({error:'管理员仅可查看用户数据。'},403);
- if(a==='read'){await db().prepare('UPDATE notices SET read=1 WHERE user_id=?').bind(u.id).run();return json({ok:true});}
- if(a==='book'||a==='selfRecord'){
-  const self=a==='selfRecord';if(self?u.id!=='wang-yida'||u.role!=='admin':u.role!=='user')return json({error:'此账号无权执行该操作。'},403);
-  const f=mealFields(b,self?'self':'booking'),kcal=self?calories(b.calories):null;
-  const requestId=String(b.requestId||crypto.randomUUID());if(!/^[a-f0-9-]{36}$/.test(requestId))throw new Error('提交标识无效，请重新打开表单。');
-  if(await db().prepare('SELECT id FROM bookings WHERE id=? AND user_id=?').bind(requestId,u.id).first())return json({ok:true});
-  await db().prepare('INSERT INTO bookings(id,user_id,name,restaurant,meal_at,week,created,meal_type,party_size,companions,contact,notes,address,latitude,longitude,coordinate_system,source,status,calories,completed_at,completion_method,transport_mode,estimated_cost_cents) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(requestId,u.id,f.name,f.restaurant,f.mealAt,f.week,new Date().toISOString(),f.mealType,f.partySize,f.companions,f.contact,f.notes,f.address,f.latitude,f.longitude,f.coordinateSystem,self?'self':'reservation',self?'completed':'pending',kcal,self?new Date().toISOString():null,self?'self':null,f.transportMode,f.estimatedCostCents).run();return json({ok:true});
+ if(['book','selfRecord','manageAddBooking','manageAddRecord'].includes(a)){
+  const managed=a==='manageAddBooking'||a==='manageAddRecord';
+  const self=a==='selfRecord';
+  const record=self||a==='manageAddRecord';
+  if(!managed&&(self?!isWang(u):!isWang(u)&&u.role!=='user'))return json({error:'此账号无权执行该操作。'},403);
+  const targetId=managed?String(b.userId??''):u.id;
+  if(managed&&!await db().prepare("SELECT id FROM users WHERE id=? AND disabled=0 AND role IN ('user','admin')").bind(targetId).first())
+   throw new Error('请选择一个有效的用餐账号。');
+  const f=mealFields(b,record?'self':'booking'), kcal=record?calories(b.calories):null;
+  const requestId=String(b.requestId||crypto.randomUUID());
+  if(!/^[a-f0-9-]{36}$/.test(requestId))throw new Error('提交标识无效，请重新打开表单。');
+  if(await db().prepare('SELECT id FROM bookings WHERE id=? AND user_id=?').bind(requestId,targetId).first())return json({ok:true});
+  const queries=[
+   db().prepare(`INSERT INTO bookings(id,user_id,name,restaurant,meal_at,week,created,meal_type,party_size,companions,contact,notes,address,latitude,longitude,coordinate_system,source,status,calories,completed_at,completion_method,transport_mode,estimated_cost_cents)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(requestId,targetId,f.name,f.restaurant,f.mealAt,f.week,new Date(now).toISOString(),f.mealType,f.partySize,f.companions,f.contact,f.notes,f.address,f.latitude,f.longitude,f.coordinateSystem,self?'self':'reservation',record?'completed':'pending',kcal,record?new Date(now).toISOString():null,self?'self':record?'manual':null,f.transportMode,f.estimatedCostCents)
+  ];
+  if(a==='manageAddRecord')queries.push(db().prepare('INSERT INTO approvals(booking_id,week,slot) VALUES(?,?,COALESCE((SELECT max(slot)+1 FROM approvals WHERE week=?),1))').bind(requestId,f.week,f.week));
+  if(managed)queries.push(audit(u,a,requestId,{userId:targetId,week:f.week}));
+  try{await db().batch(queries);}catch(error){
+   if(!await db().prepare('SELECT id FROM bookings WHERE id=? AND user_id=?').bind(requestId,targetId).first())throw error;
+  }
+  return json({ok:true});
  }
  const booking=await db().prepare('SELECT * FROM bookings WHERE id=?').bind(String(b.id||'')).first();if(!booking)throw new Error('预约不存在。');
+ if(a==='manageCancel'){
+  if(!['pending','approved','completed'].includes(booking.status))throw new Error('这份记录已经结束或取消。');
+  const reason=String(b.reason||'').trim();
+  if(!reason||reason.length>300)throw new Error('请填写300字以内的取消原因。');
+  const cancellation=[
+   db().prepare('UPDATE bookings SET id=CASE WHEN status=? AND revision=? THEN id ELSE NULL END WHERE id=?').bind(booking.status,booking.revision,booking.id),
+   db().prepare("UPDATE bookings SET status='cancelled',cancelled_by=?,reason=? WHERE id=?").bind(u.id,reason,booking.id),
+   audit(u,a,booking.id,{before:booking,reason})
+  ];
+  if(u.role==='user'){
+   const wangAlreadyNotified=booking.status==='approved'&&booking.user_id===u.id;
+   cancellation.push(db().prepare(`INSERT INTO notices(user_id,booking_id,message,created)
+    SELECT id,?,?,? FROM users WHERE id=? OR (id='wang-yida' AND ?=0)`)
+    .bind(booking.id,'管理员已取消「'+booking.restaurant+'」的用餐安排。原因：'+reason,
+     new Date(now).toISOString(),booking.user_id,Number(wangAlreadyNotified)));
+  }
+  await db().batch(cancellation);
+  return json({ok:true});
+ }
+ if(a==='manageBooking'||a==='editBooking'){
+  const managed=a==='manageBooking';
+  const active=['pending','approved'].includes(booking.status);
+  if(!managed&&(booking.user_id!==u.id||!active))return json({error:'只能修改自己尚未结束的预约。'},403);
+  if(b.revision!==undefined&&Number(b.revision)!==booking.revision)throw new Error('预约内容已更新，请刷新后再修改。');
+  const f=mealFields({
+   ...b,transportMode:b.transportMode??booking.transport_mode,
+   estimatedCost:b.estimatedCost===undefined?(booking.estimated_cost_cents==null?'':String(booking.estimated_cost_cents/100)):b.estimatedCost
+  },'edit');
+  if(f.mealAt.slice(0,16)===booking.meal_at.slice(0,16))f.mealAt=booking.meal_at;
+  if(f.mealAt!==booking.meal_at){
+   const time=Date.parse(f.mealAt);
+   if(booking.status==='completed'&&time>now)throw new Error('已完成的用餐不能改到未来。');
+   if(active&&(time<=now||time>now+366*86400000))throw new Error('请选择未来一年内的用餐时间。');
+  }
+  const kcal=managed&&booking.status==='completed'&&b.calories!==undefined&&b.calories!==''?calories(b.calories):booking.calories??null;
+  const samePlace=f.address===booking.address&&f.restaurant===booking.restaurant;
+  const hasLocation=b.latitude!==undefined&&b.longitude!==undefined;
+  const lat=hasLocation?f.latitude:samePlace?booking.latitude:null;
+  const lng=hasLocation?f.longitude:samePlace?booking.longitude:null;
+  const system=hasLocation?f.coordinateSystem:booking.coordinate_system;
+  const move=f.week!==booking.week&&['approved','completed'].includes(booking.status);
+  const queries=[db().prepare('UPDATE bookings SET id=CASE WHEN status=? AND revision=? THEN id ELSE NULL END WHERE id=?')
+   .bind(booking.status,booking.revision,booking.id)];
+  if(move)queries.push(db().prepare('DELETE FROM approvals WHERE booking_id=?').bind(booking.id));
+  if(booking.status==='pending'&&f.week!==booking.week)
+   queries.push(db().prepare('UPDATE bookings SET id=CASE WHEN (SELECT count(*) FROM approvals WHERE week=?)<'+capSql('?')+' THEN id ELSE NULL END WHERE id=?').bind(f.week,f.week,booking.id));
+  queries.push(db().prepare(`UPDATE bookings SET name=?,restaurant=?,address=?,companions=?,contact=?,notes=?,party_size=?,meal_type=?,meal_at=?,week=?,calories=?,
+   transport_mode=?,estimated_cost_cents=?,latitude=?,longitude=?,coordinate_system=?,revision=revision+1 WHERE id=?`)
+   .bind(f.name,f.restaurant,f.address,f.companions,f.contact,f.notes,f.partySize,f.mealType,f.mealAt,f.week,kcal,f.transportMode,f.estimatedCostCents,lat,lng,system,booking.id));
+  if(move)queries.push(db().prepare('INSERT INTO approvals(booking_id,week,slot) VALUES(?,?,COALESCE((SELECT max(slot)+1 FROM approvals WHERE week=?),1))').bind(booking.id,f.week,f.week));
+  if(managed)queries.push(audit(u,a,booking.id,{before:booking,after:{...f,calories:kcal}}));
+  if(booking.status==='approved'&&booking.user_id!=='wang-yida'){
+   const message='已批准的预约有修改。'+ '\n用餐人：'+f.name+'\n餐厅：'+f.restaurant+
+    '\n用餐时间（北京时间）：'+new Date(f.mealAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})+
+    '\n请打开预约查看最新安排。';
+   queries.push(db().prepare("INSERT INTO notices(user_id,booking_id,message,created) SELECT id,?,?,? FROM users WHERE id='wang-yida'")
+    .bind(booking.id,message,new Date(now).toISOString()));
+  }
+  await db().batch(queries);
+  return json({ok:true});
+ }
  if(a==='cancel'){if((booking.user_id!==u.id&&u.role!=='admin')||!['pending','approved'].includes(booking.status))throw new Error('无法取消此预约。');const changed=await db().prepare("UPDATE bookings SET status='cancelled',cancelled_by=? WHERE id=? AND status IN ('pending','approved') RETURNING id").bind(u.id,booking.id).first();if(!changed)throw new Error('预约状态已改变，请刷新。');return json({ok:true});}
  if(a==='fillCalories'){
   if(u.id!=='wang-yida'||u.role!=='admin')return json({error:'仅王亦达可补填热量。'},403);
   const changed=await db().prepare("UPDATE bookings SET calories=? WHERE id=? AND status='completed' AND source='reservation' AND calories IS NULL RETURNING id").bind(calories(b.calories),booking.id).first();
   if(!changed)throw new Error('该记录已填写热量或状态已改变；修改请联系管理员。');return json({ok:true});
  }
- if(a==='complete'){if(u.role!=='admin')return json({error:'仅王亦达可确认完成用餐。'},403);if(booking.status!=='approved'||new Date(booking.meal_at).getTime()>now)throw new Error('请在已批准的用餐时间之后确认完成。');const changed=await db().prepare("UPDATE bookings SET status='completed',completed_at=?,completion_method='manual',calories=? WHERE id=? AND status='approved' RETURNING id").bind(new Date().toISOString(),calories(b.calories),booking.id).first();if(!changed)throw new Error('预约状态已改变，请刷新。');return json({ok:true});}
- if(u.role!=='admin')return json({error:'仅王亦达可审批。'},403);
+ if(a==='complete'){if(!isWang(u))return json({error:'仅王亦达可确认完成用餐。'},403);if(booking.status!=='approved'||new Date(booking.meal_at).getTime()>now)throw new Error('请在已批准的用餐时间之后确认完成。');const changed=await db().prepare("UPDATE bookings SET status='completed',completed_at=?,completion_method='manual',calories=? WHERE id=? AND status='approved' AND revision=? RETURNING id").bind(new Date().toISOString(),calories(b.calories),booking.id,booking.revision).first();if(!changed)throw new Error('预约状态已改变，请刷新。');return json({ok:true});}
+ if(!['approve','reject'].includes(a))return json({error:'无效操作。'},400);
+ const ownerBooking=booking.user_id==='wang-yida';
+ if(ownerBooking?!canManage(u):!isWang(u))
+  return json({error:ownerBooking?'王亦达发起的预约由管理员审批。':'仅王亦达可审批这份预约。'},403);
+ if(booking.status!=='pending'||(b.revision!==undefined&&Number(b.revision)!==booking.revision))
+  throw new Error('预约已更新，请刷新后再审批。');
  if(a==='approve'){
   if(new Date(booking.meal_at).getTime()<=now)throw new Error('用餐时间已过，请拒绝此预约并请用户重新提交。');
   await db().batch([
+   db().prepare("UPDATE bookings SET id=CASE WHEN status='pending' AND revision=? THEN id ELSE NULL END WHERE id=?").bind(booking.revision,booking.id),
    db().prepare("INSERT OR IGNORE INTO approvals(booking_id,week,slot) SELECT id,week,COALESCE((SELECT max(slot)+1 FROM approvals WHERE week=bookings.week),1) FROM bookings WHERE id=? AND status='pending' AND (SELECT count(*) FROM approvals WHERE week=bookings.week)<"+capSql('bookings.week')).bind(booking.id),
    db().prepare("UPDATE bookings SET status='approved' WHERE id=? AND status='pending' AND EXISTS(SELECT 1 FROM approvals WHERE booking_id=bookings.id)").bind(booking.id),
    db().prepare("UPDATE bookings SET status='rejected',reason=? WHERE week=? AND status='pending' AND (SELECT count(*) FROM approvals WHERE week=?)>="+capSql('bookings.week')).bind(FULL,booking.week,booking.week)
   ]);const after=await db().prepare('SELECT status FROM bookings WHERE id=?').bind(booking.id).first();if(after.status!=='approved')throw new Error(after.status==='rejected'?FULL:'预约状态已改变，请刷新。');return json({ok:true});
  }
- if(a==='reject'){const reason=String(b.reason||'').trim();if(reason.length>300)throw new Error('拒绝理由最多 300 字。');await db().prepare("UPDATE bookings SET status='rejected',reason=? WHERE id=? AND status='pending'").bind(reason,booking.id).run();return json({ok:true});}
+ if(a==='reject'){const reason=String(b.reason||'').trim();if(reason.length>300)throw new Error('拒绝理由最多 300 字。');const changed=await db().prepare("UPDATE bookings SET status='rejected',reason=? WHERE id=? AND status='pending' AND revision=? RETURNING id").bind(reason,booking.id,booking.revision).first();if(!changed)throw new Error('预约已更新，请刷新后再审批。');return json({ok:true});}
  return json({error:'无效操作'},400);
  }catch(e:any){const msg=String(e.message||'');return json({error:msg.includes('QUOTA_BELOW_USED')?'新额度不能低于已批准和已完成的用餐次数。':msg.includes('QUOTA_FULL')?FULL:msg.includes('ACTIVE_BOOKING')?'你还有一份未完成的预约，请先完成或取消。':/D1|SQL|constraint/i.test(msg)?'数据更新失败，请刷新后重试。':msg||'操作失败，请重试。'},400);}}

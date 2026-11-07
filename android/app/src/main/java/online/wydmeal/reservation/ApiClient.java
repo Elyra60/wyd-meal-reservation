@@ -24,7 +24,7 @@ public final class ApiClient {
  private String cookie="";
  public ApiClient(Context context){this.context=context.getApplicationContext();prefs=context.getSharedPreferences("native_session",Context.MODE_PRIVATE);try{String encoded=prefs.getString("sealed","");if(!encoded.isEmpty()&&prefs.getLong("expires",0)>System.currentTimeMillis()){String[] parts=encoded.split(":");Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(parts[0],Base64.NO_WRAP)));cookie=new String(c.doFinal(Base64.decode(parts[1],Base64.NO_WRAP)),"UTF-8");}}catch(Exception e){clear();}}
  private SecretKey key()throws Exception{KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);String alias="wyd-native-session-v2";if(!store.containsAlias(alias)){KeyGenerator generator=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");generator.init(new KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());generator.generateKey();}return (SecretKey)store.getKey(alias,null);}
- public synchronized void clear(){cookie="";prefs.edit().clear().apply();context.getSharedPreferences("system_notices",0).edit().putString("active","").apply();context.getSystemService(android.app.NotificationManager.class).cancelAll();PushBridge.inactive(context);}
+ public synchronized void clear(){cookie="";prefs.edit().clear().apply();}
  public synchronized String sessionKey(){if(cookie.isEmpty())return "";try{byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(cookie.getBytes("UTF-8"));StringBuilder s=new StringBuilder();for(byte b:digest)s.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return s.toString();}catch(Exception e){return "";}}
  private void acceptCookie(String header)throws Exception{
   if(header==null||!header.startsWith("meal_session="))return;
@@ -43,7 +43,7 @@ public final class ApiClient {
  public byte[] avatar(String path)throws Exception{if(!path.startsWith("/api/avatar"))throw new IOException("头像地址无效");return request(path,null);}
  private synchronized byte[] request(String path,JSONObject value)throws Exception{
   if(!path.startsWith("/api/")||path.contains("://")||path.contains(".."))throw new IOException("请求地址无效");
-  HttpURLConnection c=(HttpURLConnection)new URL(ORIGIN+path).openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(15000);c.setReadTimeout(20000);c.setRequestProperty("Accept","application/json");c.setRequestProperty("User-Agent","WydMealNative/2.3 Android");c.setRequestProperty("Origin",ORIGIN);if(!cookie.isEmpty())c.setRequestProperty("Cookie",cookie);
+  HttpURLConnection c=(HttpURLConnection)new URL(ORIGIN+path).openConnection();c.setInstanceFollowRedirects(false);c.setConnectTimeout(15000);c.setReadTimeout(20000);c.setRequestProperty("Accept","application/json");c.setRequestProperty("User-Agent","WydMealNative/2.4 Android");c.setRequestProperty("Origin",ORIGIN);if(!cookie.isEmpty())c.setRequestProperty("Cookie",cookie);
   try{
    if(value!=null){c.setRequestMethod("POST");c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json; charset=utf-8");try(OutputStream out=c.getOutputStream()){out.write(value.toString().getBytes("UTF-8"));}}
    int status=c.getResponseCode();if(status==401){clear();throw new SessionExpired();}
